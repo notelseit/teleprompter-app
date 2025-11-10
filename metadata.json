@@ -1,0 +1,8 @@
+{
+  "name": "TelePrompt Studio",
+  "description": "A professional teleprompter for content creators, podcasters, trainers, and video makers. Features adjustable speed, font controls, voice-activated scrolling, and a built-in video recorder.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
