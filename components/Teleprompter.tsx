@@ -16,12 +16,14 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(script.content);
+  const [isSpeedIndicatorVisible, setIsSpeedIndicatorVisible] = useState(false);
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef(0);
   const animationFrameRef = useRef<number>();
   const lineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
   const lastTimestampRef = useRef<number>(0);
+  const speedIndicatorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Refs for state and props to prevent stale closures in callbacks
   const scrollSpeedRef = useRef(settings.scrollSpeed);
@@ -132,13 +134,19 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
   
   const handleScrollChange = useCallback((delta: number) => {
     if (!scrollContainerRef.current) return;
-    // Use refs to access the latest state without being in the dependency array
     if (isScrollingRef.current) {
         const newSpeed = Math.max(1, Math.min(100, settingsRef.current.scrollSpeed + (delta * 0.5)));
-        // Directly update the ref for immediate effect in the animation loop
         scrollSpeedRef.current = newSpeed;
-        // Propagate the change up to persist it and keep the UI (slider) in sync
         onSettingsChange({ scrollSpeed: newSpeed });
+
+        // Show speed indicator
+        setIsSpeedIndicatorVisible(true);
+        if (speedIndicatorTimeoutRef.current) {
+            clearTimeout(speedIndicatorTimeoutRef.current);
+        }
+        speedIndicatorTimeoutRef.current = setTimeout(() => {
+            setIsSpeedIndicatorVisible(false);
+        }, 1500); // Hide after 1.5 seconds
     } else {
         scrollContainerRef.current.scrollTop += delta * 20;
         scrollPositionRef.current = scrollContainerRef.current.scrollTop;
@@ -213,6 +221,9 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     return () => {
         window.removeEventListener('keydown', handleKeyDown);
         container?.removeEventListener('wheel', handleWheel);
+        if (speedIndicatorTimeoutRef.current) {
+            clearTimeout(speedIndicatorTimeoutRef.current);
+        }
     };
   // The dependencies are memoized callbacks and stable props, preventing re-runs
   }, [handlePlayPause, handleStop, handleScrollChange, onSettingsChange]);
@@ -261,6 +272,11 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
           {formattedContent}
         </div>
         <div style={{ height: '50vh' }}></div>
+      </div>
+
+      {/* Speed Indicator */}
+      <div className={`fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/60 backdrop-blur-sm text-white px-4 py-2 rounded-lg text-2xl font-mono transition-opacity duration-300 pointer-events-none z-50 ${isSpeedIndicatorVisible ? 'opacity-100' : 'opacity-0'}`}>
+          Speed: {settings.scrollSpeed.toFixed(1)}
       </div>
       
       {/* Real-time settings */}
