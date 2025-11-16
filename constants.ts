@@ -7,4 +7,7 @@ export const DEFAULT_SETTINGS: Settings = {
   lineSpacing: 1.5,
   isMirrorMode: false,
   isVoiceControl: false,
+  guidePosition: 50,
+  guideZoneSize: 5,
+  autoCenterSensitivity: 50,
 };

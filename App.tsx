@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [settings, setSettings] = useLocalStorage<Settings>('teleprompt-settings', DEFAULT_SETTINGS);
   const [currentView, setCurrentView] = useState<AppView>('list');
   const [activeScript, setActiveScript] = useState<Script | null>(null);
+  const [isEditorDirty, setIsEditorDirty] = useState(false);
 
   const handleCreateNewScript = () => {
     const newScript: Script = {
@@ -24,11 +25,13 @@ const App: React.FC = () => {
     setScripts(prev => [newScript, ...prev]);
     setActiveScript(newScript);
     setCurrentView('edit');
+    setIsEditorDirty(false);
   };
 
   const handleSelectScript = (script: Script) => {
     setActiveScript(script);
     setCurrentView('edit');
+    setIsEditorDirty(false);
   };
 
   const handleSaveScript = useCallback((updatedScript: Script) => {
@@ -63,8 +66,16 @@ const App: React.FC = () => {
   };
   
   const handleBackToList = () => {
-    setActiveScript(null);
-    setCurrentView('list');
+    if (isEditorDirty) {
+      if (window.confirm('You have unsaved changes. Are you sure you want to leave?')) {
+        setActiveScript(null);
+        setCurrentView('list');
+        setIsEditorDirty(false);
+      }
+    } else {
+      setActiveScript(null);
+      setCurrentView('list');
+    }
   };
 
   const handleSettingsChange = useCallback((newSettings: Partial<Settings>) => {
@@ -101,7 +112,7 @@ const App: React.FC = () => {
   const renderContent = () => {
     switch (currentView) {
       case 'edit':
-        return activeScript && <ScriptEditor script={activeScript} onSave={handleSaveScript} onStartPrompting={handleStartPrompting} onStartRecording={handleStartRecording} />;
+        return activeScript && <ScriptEditor script={activeScript} settings={settings} onSave={handleSaveScript} onStartPrompting={handleStartPrompting} onStartRecording={handleStartRecording} onDirtyStateChange={setIsEditorDirty} />;
       case 'prompt':
         return activeScript && <div className="pt-16 h-full"><Teleprompter script={activeScript} settings={settings} onClose={handleCloseSession} onSettingsChange={handleSettingsChange} onSaveScript={handleSaveScript} /></div>;
       case 'record':

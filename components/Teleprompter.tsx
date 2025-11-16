@@ -1,7 +1,7 @@
 // Fix: Implement the Teleprompter component to resolve import errors and provide core functionality.
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Script, Settings } from '../types';
-import { PlayIcon, PauseIcon, StopIcon, MirrorIcon, ZoomInIcon, ZoomOutIcon, LineSpacingIncreaseIcon, LineSpacingDecreaseIcon, EditIcon } from './icons/IconDefs';
+import { PlayIcon, PauseIcon, StopIcon, MirrorIcon, ZoomInIcon, ZoomOutIcon, LineSpacingIncreaseIcon, LineSpacingDecreaseIcon, EditIcon, UndoIcon } from './icons/IconDefs';
 
 interface TeleprompterProps {
   script: Script;
@@ -11,14 +11,23 @@ interface TeleprompterProps {
   onSaveScript: (updatedScript: Script) => void;
 }
 
+const TriangleMarkerIcon = () => (
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" className="text-brand-blue drop-shadow-lg">
+      <path d="M8 5v14l11-7z" />
+    </svg>
+);
+
 const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, onSettingsChange, onSaveScript }) => {
   const [isScrolling, setIsScrolling] = useState(false);
-  const [activeLineIndex, setActiveLineIndex] = useState(-1);
+  const [activeLineIndices, setActiveLineIndices] = useState<Set<number>>(new Set());
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(script.content);
   const [isSpeedIndicatorVisible, setIsSpeedIndicatorVisible] = useState(false);
+  const [isDraggingGuide, setIsDraggingGuide] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const teleprompterRef = useRef<HTMLDivElement>(null);
   const scrollPositionRef = useRef(0);
   const animationFrameRef = useRef<number>();
   const lineRefs = useRef<(HTMLParagraphElement | null)[]>([]);
@@ -30,6 +39,7 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
   const isScrollingRef = useRef(isScrolling);
   const isEditingRef = useRef(isEditing);
   const settingsRef = useRef(settings);
+  const activeLineIndicesRef = useRef(activeLineIndices);
 
   useEffect(() => {
     scrollSpeedRef.current = settings.scrollSpeed;
@@ -44,6 +54,24 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     isEditingRef.current = isEditing;
   }, [isEditing]);
 
+  useEffect(() => {
+    activeLineIndicesRef.current = activeLineIndices;
+  }, [activeLineIndices]);
+
+  useEffect(() => {
+    let timerId: ReturnType<typeof setInterval> | undefined;
+    if (isScrolling) {
+      timerId = setInterval(() => {
+        setElapsedTime(prev => prev + 1);
+      }, 1000);
+    }
+    return () => {
+      if (timerId) {
+        clearInterval(timerId);
+      }
+    };
+  }, [isScrolling]);
+
   // Time-based scrolling logic for maximum smoothness
   const scroll = useCallback((timestamp: number) => {
     if (!scrollContainerRef.current) return;
@@ -57,6 +85,35 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     // Calculate scroll distance based on elapsed time for frame-rate independence
     const scrollAmount = (scrollSpeedRef.current * deltaTime) / 1000;
     scrollPositionRef.current += scrollAmount;
+
+    // Auto-centering adjustment logic to keep active line near the guide
+    const activeLines = Array.from(activeLineIndicesRef.current)
+      .map(index => lineRefs.current[index])
+      .filter((el): el is HTMLParagraphElement => el !== null);
+
+    if (activeLines.length > 0 && scrollContainerRef.current) {
+        const containerRect = scrollContainerRef.current.getBoundingClientRect();
+        
+        // Calculate the average vertical center of all active lines relative to the container
+        const avgLineVCenterInContainer = activeLines.reduce((sum, el) => {
+            const lineRect = el.getBoundingClientRect();
+            // Center of the line: line top relative to container + half of line height
+            return sum + (lineRect.top - containerRect.top + lineRect.height / 2);
+        }, 0) / activeLines.length;
+        
+        // Target Y is the guide's percentage position within the container height
+        const targetY = containerRect.height * (settingsRef.current.guidePosition / 100);
+        
+        const error = avgLineVCenterInContainer - targetY;
+        
+        // Apply a gentle, frame-rate independent correction based on sensitivity setting.
+        const baseCorrectionFactor = 0.004; // This represents max strength at 100%
+        const sensitivityMultiplier = (settingsRef.current.autoCenterSensitivity || 50) / 100;
+        const correctionFactor = baseCorrectionFactor * sensitivityMultiplier;
+        const correction = error * correctionFactor * deltaTime;
+        
+        scrollPositionRef.current += correction;
+    }
     
     scrollContainerRef.current.scrollTop = scrollPositionRef.current;
     
@@ -87,20 +144,32 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     };
   }, [isScrolling, scroll]);
 
-  // Dynamic line highlighting using IntersectionObserver
+  // Dynamic line highlighting using IntersectionObserver, linked to guide position
   useEffect(() => {
+    const halfZone = settings.guideZoneSize / 2;
+    const topMargin = -(settings.guidePosition - halfZone);
+    const bottomMargin = -(100 - (settings.guidePosition + halfZone));
+
     const observer = new IntersectionObserver(
         (entries) => {
             entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    const index = parseInt(entry.target.getAttribute('data-index') || '-1', 10);
-                    setActiveLineIndex(index);
-                }
+                const index = parseInt(entry.target.getAttribute('data-index') || '-1', 10);
+                if (index === -1) return;
+
+                setActiveLineIndices(prevIndices => {
+                    const newIndices = new Set(prevIndices);
+                    if (entry.isIntersecting) {
+                        newIndices.add(index);
+                    } else {
+                        newIndices.delete(index);
+                    }
+                    return newIndices;
+                });
             });
         },
         {
             root: scrollContainerRef.current,
-            rootMargin: "-50% 0px -50% 0px", // Creates a horizontal line in the middle of the viewport
+            rootMargin: `${topMargin}% 0px ${bottomMargin}% 0px`, // Creates a horizontal band based on the guide
             threshold: 0
         }
     );
@@ -116,7 +185,7 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
         });
         observer.disconnect();
     };
-  }, [script.content]); // Rerun when script content changes
+  }, [script.content, settings.guidePosition, settings.guideZoneSize]);
 
 
   const handlePlayPause = useCallback(() => {
@@ -130,6 +199,7 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
       scrollContainerRef.current.scrollTop = 0;
       scrollPositionRef.current = 0;
     }
+    setElapsedTime(0);
   }, []);
   
   const handleScrollChange = useCallback((delta: number) => {
@@ -164,6 +234,11 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     onSettingsChange({ lineSpacing: newSpacing });
   }, [onSettingsChange, settings.lineSpacing]);
 
+  const handleResetTimer = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setElapsedTime(0);
+  }, []);
+
   // Script editing handlers
   const handleOpenEditor = useCallback(() => {
     setIsScrolling(false);
@@ -175,6 +250,41 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     onSaveScript({ ...script, content: editText });
     setIsEditing(false);
   }, [onSaveScript, script, editText]);
+
+  const handleGuideMouseDown = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsDraggingGuide(true);
+  }, []);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+        if (!teleprompterRef.current) return;
+        
+        const rect = teleprompterRef.current.getBoundingClientRect();
+        const newY = e.clientY - rect.top;
+        let newPosition = (newY / rect.height) * 100;
+        
+        newPosition = Math.max(10, Math.min(90, newPosition));
+
+        onSettingsChange({ guidePosition: Math.round(newPosition) });
+    };
+
+    const handleMouseUp = () => {
+        setIsDraggingGuide(false);
+    };
+
+    if (isDraggingGuide) {
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = 'ns-resize';
+    }
+
+    return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = '';
+    };
+  }, [isDraggingGuide, onSettingsChange]);
   
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -183,24 +293,46 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
         }
 
         let handled = true;
-        switch (e.key.toLowerCase()) {
-            case ' ':
-                handlePlayPause();
-                break;
-            case 's':
-                handleStop();
-                break;
-            case 'm':
-                onSettingsChange({ isMirrorMode: !settingsRef.current.isMirrorMode });
-                break;
-            case 'arrowup':
-                handleScrollChange(-1);
-                break;
-            case 'arrowdown':
-                handleScrollChange(1);
-                break;
-            default:
+
+        if (e.ctrlKey || e.metaKey) {
+            // Font Size Controls: Ctrl/Cmd + Plus/Minus
+            if (e.key === '=' || e.key === '+') {
+                handleFontSizeChange(2);
+            } else if (e.key === '-') {
+                handleFontSizeChange(-2);
+            } else {
                 handled = false;
+            }
+        } else if (e.altKey) {
+            // Line Spacing Controls: Alt + Up/Down
+            if (e.key === 'ArrowUp') {
+                handleLineSpacingChange(0.1);
+            } else if (e.key === 'ArrowDown') {
+                handleLineSpacingChange(-0.1);
+            } else {
+                handled = false;
+            }
+        } else {
+            // Standard Controls
+            switch (e.key.toLowerCase()) {
+                case ' ':
+                    handlePlayPause();
+                    break;
+                case 's':
+                    handleStop();
+                    break;
+                case 'm':
+                    onSettingsChange({ isMirrorMode: !settingsRef.current.isMirrorMode });
+                    break;
+                case 'arrowup':
+                    handleScrollChange(-1);
+                    break;
+                case 'arrowdown':
+                    handleScrollChange(1);
+                    break;
+                default:
+                    handled = false;
+            }
         }
 
         if (handled) {
@@ -225,15 +357,14 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
             clearTimeout(speedIndicatorTimeoutRef.current);
         }
     };
-  // The dependencies are memoized callbacks and stable props, preventing re-runs
-  }, [handlePlayPause, handleStop, handleScrollChange, onSettingsChange]);
+  }, [handlePlayPause, handleStop, handleScrollChange, onSettingsChange, handleFontSizeChange, handleLineSpacingChange]);
   
 
   const formattedContent = script.content.split('\n').map((line, index) => {
-    const isActive = index === activeLineIndex;
+    const isActive = activeLineIndices.has(index);
     const lineClasses = [
         "transition-all duration-300 ease-in-out",
-        isActive ? "text-brand-blue font-semibold scale-105" : "text-white opacity-70"
+        isActive ? "text-yellow-300 font-bold opacity-100" : "text-white opacity-70"
     ].join(" ");
 
     return (
@@ -242,6 +373,12 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
         </p>
     );
   });
+
+  const formatTime = (totalSeconds: number) => {
+    const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
+    const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+    return `${minutes}:${seconds}`;
+  };
 
   const textStyle = {
     fontSize: `${settings.fontSize}px`,
@@ -260,8 +397,40 @@ const Teleprompter: React.FC<TeleprompterProps> = ({ script, settings, onClose, 
     settings.isMirrorMode ? "transform -scale-x-100" : ""
   ].join(" ");
 
+  const teleprompterContainerClasses = [
+    "relative w-full h-full flex flex-col text-white overflow-hidden",
+    "border-4 transition-all duration-300 ease-in-out",
+    settings.isMirrorMode ? "bg-slate-900 border-brand-blue/75" : "bg-black border-transparent",
+  ].join(" ");
+
   return (
-    <div className="relative w-full h-full flex flex-col bg-black text-white overflow-hidden" onClick={handlePlayPause}>
+    <div ref={teleprompterRef} className={teleprompterContainerClasses} onClick={handlePlayPause}>
+      {/* Timer */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 bg-dark-surface/60 backdrop-blur-sm p-1 rounded-full border border-dark-border shadow-lg">
+          <span className="text-white font-mono tabular-nums px-3 py-1 text-lg">
+              {formatTime(elapsedTime)}
+          </span>
+          <button onClick={handleResetTimer} className="p-2 text-white rounded-full hover:bg-slate-700 transition-colors" aria-label="Reset Timer">
+              <UndoIcon />
+          </button>
+      </div>
+        
+      <div
+          className="absolute left-2 z-20 cursor-ns-resize flex items-center h-6"
+          style={{ top: `calc(${settings.guidePosition}% - 12px)` }}
+          onMouseDown={handleGuideMouseDown}
+          aria-hidden="true"
+      >
+          <TriangleMarkerIcon />
+      </div>
+      <div
+          className="absolute right-2 z-20 cursor-ns-resize flex items-center h-6 transform -scale-x-100"
+          style={{ top: `calc(${settings.guidePosition}% - 12px)` }}
+          onMouseDown={handleGuideMouseDown}
+          aria-hidden="true"
+      >
+          <TriangleMarkerIcon />
+      </div>
       <div 
         ref={scrollContainerRef}
         className={scrollContainerClasses}

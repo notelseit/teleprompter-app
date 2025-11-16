@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Script } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Script, Settings } from '../types';
 import { useHistory } from '../hooks/useHistory';
-import { PlayIcon, VideoCameraIcon, DocumentTextIcon, UndoIcon, RedoIcon } from './icons/IconDefs';
+import { PlayIcon, VideoCameraIcon, DocumentTextIcon, UndoIcon, RedoIcon, EyeIcon, MirrorIcon } from './icons/IconDefs';
 
 interface ScriptEditorProps {
   script: Script;
+  settings: Settings;
   onSave: (updatedScript: Script) => void;
   onStartPrompting: (script: Script) => void;
   onStartRecording: (script: Script) => void;
+  onDirtyStateChange: (isDirty: boolean) => void;
 }
 
-const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartPrompting, onStartRecording }) => {
+const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, settings, onSave, onStartPrompting, onStartRecording, onDirtyStateChange }) => {
   const { state: historyState, setState: setHistoryState, resetState, undo, redo, canUndo, canRedo } = useHistory({ 
       title: script.title, 
       content: script.content 
@@ -18,6 +20,11 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
   
   const [editorState, setEditorState] = useState(historyState);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isToastVisible, setIsToastVisible] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+
+  const [showPreview, setShowPreview] = useState(true);
+  const [isPreviewMirrored, setIsPreviewMirrored] = useState(false);
 
   // When history changes (e.g., undo/redo), update the live editor state
   useEffect(() => {
@@ -28,6 +35,13 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
   useEffect(() => {
     resetState({ title: script.title, content: script.content });
   }, [script.id, script.title, script.content, resetState]);
+
+  // Track if there are unsaved changes and notify the parent component.
+  useEffect(() => {
+    const hasUnsavedChanges = editorState.title !== script.title || editorState.content !== script.content;
+    setIsDirty(hasUnsavedChanges);
+    onDirtyStateChange(hasUnsavedChanges);
+  }, [editorState, script.title, script.content, onDirtyStateChange]);
 
   // Debounce editor changes before committing them to the history stack
   useEffect(() => {
@@ -47,7 +61,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
     autoSaveRef.current = { onSave, script, editorState };
   });
 
-  // Set up the auto-save interval and unmount-saver
+  // Set up the auto-save interval
   useEffect(() => {
     const save = () => {
       const { onSave: currentOnSave, script: currentScript, editorState: currentEditorState } = autoSaveRef.current;
@@ -61,22 +75,42 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
     // Save periodically every 30 seconds
     const intervalId = setInterval(save, 30000);
     
-    // Save when the component is unmounted (e.g., user navigates away)
+    // Cleanup interval on unmount.
     return () => {
       clearInterval(intervalId);
-      save();
     };
   }, []); // Empty dependency array ensures this effect runs only once on mount
 
-  // Effect to clear the toast message after a delay
+  // Effect to manage toast visibility and animation
   useEffect(() => {
     if (toastMessage) {
-      const timer = setTimeout(() => {
+      setIsToastVisible(true);
+      const visibilityTimer = setTimeout(() => {
+        setIsToastVisible(false);
+      }, 2500); // Start fading out after 2.5s
+      const messageTimer = setTimeout(() => {
         setToastMessage(null);
-      }, 3000); // Toast visible for 3 seconds
-      return () => clearTimeout(timer);
+      }, 3000); // Remove from DOM after 3s total
+      return () => {
+        clearTimeout(visibilityTimer);
+        clearTimeout(messageTimer);
+      };
     }
   }, [toastMessage]);
+
+  // Handle browser-level navigation (close tab, reload)
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (isDirty) {
+        event.preventDefault();
+        event.returnValue = ''; // Required for modern browsers to show the prompt
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isDirty]);
 
   const handleSave = () => {
     onSave({ ...script, ...editorState });
@@ -121,31 +155,71 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
 
   return (
     <div className="p-4 md:p-8 flex flex-col h-full bg-dark-bg">
-      <input
-        type="text"
-        value={editorState.title}
-        onChange={(e) => setEditorState(prev => ({...prev, title: e.target.value}))}
-        onBlur={handleSave}
-        placeholder="Script Title"
-        className="bg-transparent text-2xl md:text-4xl font-bold border-none focus:ring-0 p-2 mb-4 text-slate-100"
-      />
-      <textarea
-        value={editorState.content}
-        onChange={(e) => setEditorState(prev => ({...prev, content: e.target.value}))}
-        onBlur={handleSave}
-        placeholder="Start writing your script here..."
-        className="flex-grow bg-dark-surface p-4 rounded-lg border border-dark-border text-slate-200 resize-none focus:ring-brand-blue focus:border-brand-blue w-full text-lg"
-      />
+        <div className="flex-grow flex gap-8 overflow-hidden">
+            {/* Editor Column */}
+            <div className="flex flex-col flex-1 min-w-0 h-full">
+                <input
+                    type="text"
+                    value={editorState.title}
+                    onChange={(e) => setEditorState(prev => ({...prev, title: e.target.value}))}
+                    onBlur={handleSave}
+                    placeholder="Script Title"
+                    className="bg-transparent text-2xl md:text-4xl font-bold border-none focus:ring-0 p-2 mb-4 text-slate-100"
+                />
+                <textarea
+                    value={editorState.content}
+                    onChange={(e) => setEditorState(prev => ({...prev, content: e.target.value}))}
+                    onBlur={handleSave}
+                    placeholder="Start writing your script here..."
+                    className="flex-grow bg-dark-surface p-4 rounded-lg border border-dark-border text-slate-200 resize-none focus:ring-brand-blue focus:border-brand-blue w-full text-lg"
+                />
+            </div>
+
+            {/* Preview Column */}
+            {showPreview && (
+            <div className="hidden md:flex flex-col flex-1 min-w-0 h-full">
+                <div className="flex justify-between items-center mb-4">
+                    <span className="text-lg font-bold text-slate-100">Preview</span>
+                    <button 
+                        onClick={() => setIsPreviewMirrored(!isPreviewMirrored)} 
+                        className={`p-2 rounded-md transition-colors ${isPreviewMirrored ? 'bg-brand-blue text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`}
+                        aria-label="Toggle mirror preview"
+                    >
+                        <MirrorIcon />
+                    </button>
+                </div>
+                <div 
+                className={`flex-grow bg-black rounded-lg border border-dark-border overflow-y-auto p-4 transition-transform duration-300 ${isPreviewMirrored ? 'transform -scale-x-100' : ''}`}
+                style={{
+                    fontSize: `${settings.fontSize}px`,
+                    lineHeight: settings.lineSpacing,
+                }}
+                >
+                <div className={`text-white text-center transition-transform duration-300 ${isPreviewMirrored ? 'transform -scale-x-100' : ''}`}>
+                    {editorState.content.split('\n').map((line, index) => (
+                    <p key={index}>{line || '\u00A0'}</p>
+                    ))}
+                </div>
+                </div>
+            </div>
+            )}
+        </div>
+
+
       <div className="flex flex-wrap items-center justify-between gap-4 mt-4">
         <div className="flex items-center gap-2">
             <label htmlFor="file-upload" className="cursor-pointer flex items-center gap-2 px-4 py-2 bg-slate-700 text-slate-200 rounded-md hover:bg-slate-600 transition-colors">
                 <DocumentTextIcon/>
                 <span className="hidden sm:inline">Import</span>
             </label>
-            <input id="file-upload" type="file" accept=".txt,.docx,.pdf" className="hidden" onChange={handleFileImport}/>
+            <input id="file-upload" type="file" accept=".txt" className="hidden" onChange={handleFileImport}/>
             
             <button onClick={undo} disabled={!canUndo} className="p-2 bg-slate-700 text-slate-200 rounded-md hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"><UndoIcon/></button>
             <button onClick={redo} disabled={!canRedo} className="p-2 bg-slate-700 text-slate-200 rounded-md hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"><RedoIcon/></button>
+            
+            <button onClick={() => setShowPreview(!showPreview)} className={`hidden md:block p-2 rounded-md transition-colors ${showPreview ? 'bg-brand-blue text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}`} aria-label="Toggle preview">
+                <EyeIcon />
+            </button>
 
             <p className="text-xs text-slate-500 hidden md:block">.txt supported</p>
         </div>
@@ -166,7 +240,7 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onSave, onStartProm
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 border border-dark-border"
+          className={`fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded-lg shadow-lg z-50 border border-dark-border transition-opacity duration-500 ${isToastVisible ? 'opacity-100' : 'opacity-0'}`}
         >
           {toastMessage}
         </div>

@@ -12,6 +12,9 @@ export interface Settings {
   lineSpacing: number;
   isMirrorMode: boolean;
   isVoiceControl: boolean;
+  guidePosition: number;
+  guideZoneSize: number;
+  autoCenterSensitivity: number;
 }
 
 export type AppView = 'list' | 'edit' | 'prompt' | 'record';
